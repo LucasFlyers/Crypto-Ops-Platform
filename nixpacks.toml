@@ -1,14 +1,6 @@
-[phases.setup]
-nixPkgs = ["python311", "gcc", "libpq"]
-
 [phases.install]
 cmds = [
-  "pip install fastapi uvicorn[standard] sqlalchemy[asyncio] asyncpg alembic pydantic pydantic-settings celery[redis] redis openai structlog httpx tenacity python-dotenv streamlit pandas plotly psycopg2-binary"
-]
-
-[phases.build]
-cmds = [
-  "alembic upgrade head"
+  "pip install -r requirements.txt"
 ]
 
 [start]
