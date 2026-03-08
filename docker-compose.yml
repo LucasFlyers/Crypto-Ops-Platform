@@ -1,0 +1,196 @@
+version: "3.9"
+
+# ─── Network ──────────────────────────────────────────────────────
+networks:
+  crypto-ops-net:
+    driver: bridge
+
+# ─── Volumes ──────────────────────────────────────────────────────
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+# ─── Services ─────────────────────────────────────────────────────
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: crypto-ops-postgres
+    environment:
+      POSTGRES_DB: crypto_ops
+      POSTGRES_USER: crypto_ops_user
+      POSTGRES_PASSWORD: securepassword123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - crypto-ops-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crypto_ops_user -d crypto_ops"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Redis ─────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: crypto-ops-redis
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - crypto-ops-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── Database Migrations ───────────────────────────────────────
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto-ops-migrate
+    command: ["alembic", "upgrade", "head"]
+    env_file: .env
+    environment:
+      DATABASE_URL_SYNC: postgresql://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+      DATABASE_URL: postgresql+asyncpg://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - crypto-ops-net
+    restart: on-failure
+
+  # ── FastAPI Backend ───────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: crypto-ops-api
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+      DATABASE_URL_SYNC: postgresql://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      POSTGRES_HOST: postgres
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - crypto-ops-net
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+  # ── Celery Worker: Classification ─────────────────────────────
+  worker-classification:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: crypto-ops-worker-classification
+    command: >
+      celery -A app.workers.celery_app worker
+      --loglevel=info
+      --queues=classification
+      --concurrency=2
+      --hostname=classification@%h
+    env_file: .env
+    environment:
+      DATABASE_URL_SYNC: postgresql://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - crypto-ops-net
+    restart: unless-stopped
+
+  # ── Celery Worker: Fraud + Routing ────────────────────────────
+  worker-fraud-routing:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: crypto-ops-worker-fraud-routing
+    command: >
+      celery -A app.workers.celery_app worker
+      --loglevel=info
+      --queues=fraud,routing
+      --concurrency=4
+      --hostname=fraud-routing@%h
+    env_file: .env
+    environment:
+      DATABASE_URL_SYNC: postgresql://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - crypto-ops-net
+    restart: unless-stopped
+
+  # ── Celery Flower (task monitoring) ──────────────────────────
+  flower:
+    image: mher/flower:2.0
+    container_name: crypto-ops-flower
+    command: celery flower --broker=redis://redis:6379/0 --port=5555
+    ports:
+      - "5555:5555"
+    depends_on:
+      - redis
+    networks:
+      - crypto-ops-net
+    restart: unless-stopped
+
+  # ── Streamlit Dashboard ───────────────────────────────────────
+  dashboard:
+    image: python:3.11-slim
+    container_name: crypto-ops-dashboard
+    working_dir: /app
+    command: >
+      sh -c "pip install streamlit pandas plotly psycopg2-binary -q &&
+             streamlit run dashboard/app.py --server.port=8501 --server.address=0.0.0.0"
+    volumes:
+      - ./dashboard:/app/dashboard
+    environment:
+      DATABASE_URL_SYNC: postgresql://crypto_ops_user:securepassword123@postgres:5432/crypto_ops
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks:
+      - crypto-ops-net
+    restart: unless-stopped
