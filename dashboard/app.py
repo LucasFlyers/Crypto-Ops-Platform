@@ -21,7 +21,8 @@ st.set_page_config(
 )
 
 DB_URL = "postgresql://neondb_owner:npg_lput5gMnSq0B@ep-square-hill-a4z4p0ij-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
-API_URL = "http://localhost:8000"
+import os
+API_URL = os.getenv("API_URL", "http://localhost:8000").rstrip("/")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CSS
