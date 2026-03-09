@@ -39,6 +39,17 @@ class Settings(BaseSettings):
         default="postgresql://crypto_ops_user:securepassword123@localhost:5432/crypto_ops"
     )
 
+    def model_post_init(self, __context) -> None:
+        """Auto-fix database URL prefixes after loading from env."""
+        # Railway sets DATABASE_URL with plain postgresql:// — fix for asyncpg
+        if self.database_url.startswith("postgresql://"):
+            object.__setattr__(self, "database_url",
+                self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1))
+        # Ensure sync URL uses plain postgresql://
+        if self.database_url_sync.startswith("postgresql+asyncpg://"):
+            object.__setattr__(self, "database_url_sync",
+                self.database_url_sync.replace("postgresql+asyncpg://", "postgresql://", 1))
+
     # ── Redis / Celery ───────────────────────────────────────────
     redis_url: str = Field(default="redis://localhost:6379/0")
     celery_broker_url: str = Field(default="redis://localhost:6379/0")
