@@ -41,6 +41,15 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context) -> None:
         """Auto-fix database URL prefixes after loading from env."""
+        if self.database_url.startswith("postgresql://"):
+            object.__setattr__(self, "database_url",
+                self.database_url.replace("postgresql://", "postgresql+asyncpg://", 1))
+        if self.database_url_sync.startswith("postgresql+asyncpg://"):
+            object.__setattr__(self, "database_url_sync",
+                self.database_url_sync.replace("postgresql+asyncpg://", "postgresql://", 1))
+
+    def model_post_init(self, __context) -> None:
+        """Auto-fix database URL prefixes after loading from env."""
         # Railway sets DATABASE_URL with plain postgresql:// — fix for asyncpg
         if self.database_url.startswith("postgresql://"):
             object.__setattr__(self, "database_url",
